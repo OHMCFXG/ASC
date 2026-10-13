@@ -59,6 +59,28 @@ line. With `-o`, output is written to the selected file instead of stdout.
 
 You can also use `python main.py` as before — it delegates to the same entry point.
 
+# MCP
+ASC ships a stdio MCP server (`droidasc-mcp`, optional `mcp` extra) exposing
+`getclass`, `listclass`, `getmanifest` and `findrefs` as tools. Each call is
+stateless, just like one CLI run, so no persistent instance is needed.
+`listclass` / `findrefs` return at most `limit` lines (default 1000, `0` = unlimited).
+
+Run it straight from a source checkout with uv, no install step:
+
+```json
+{
+  "mcpServers": {
+    "droidasc": {
+      "command": "uv",
+      "args": ["run", "--no-project", "--with-editable", "/path/to/ASC[mcp]", "droidasc-mcp"]
+    }
+  }
+}
+```
+
+For Claude Code:
+`claude mcp add droidasc -- uv run --no-project --with-editable "/path/to/ASC[mcp]" droidasc-mcp`.
+
 # Sponsors
 
 | Sponsor | Amount |
