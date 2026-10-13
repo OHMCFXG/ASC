@@ -441,6 +441,21 @@ class SourceEditTests(unittest.TestCase):
             "method": ["first", True],
         }), {0})
 
+    def test_precise_class_lookup_survives_utf16_code_unit_order(self):
+        # type_ids is sorted by UTF-16 code unit, where U+10000 (a surrogate pair)
+        # sorts before U+E000 - the opposite of Python's code point order. A value
+        # comparison prunes the wrong half and walks past the entry it wants.
+        from test_mutf8_strings import _make_class_dex
+
+        names = ['Ll/\U00010000;', 'Ll/;']
+        dex = DEX.parse(memoryview(bytes(_make_class_dex(names))), 'utf16-order.dex')
+        method = FindRefManager(dex)._get_method_locator(True)
+        field = FindRefManager(dex)._get_field_locator(True)
+        for index, name in enumerate(names):
+            with self.subTest(name=name):
+                self.assertEqual(method._find_type_idx_precisely(name), index)
+                self.assertEqual(field._find_type_idx_precisely(name), index)
+
     def test_exact_field_locator_does_not_use_substring_matching(self):
         from dex_fixture import make_static_field_dex
 

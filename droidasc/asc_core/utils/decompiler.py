@@ -16,6 +16,7 @@ dadguard_dex.HeaderItem.__init__ = monkey_header_init
 from dadguard.decompiler import decompile
 from dadguard.decompiler import instruction as dadguard_instruction
 from dadguard.decompiler import util as dadguard_util
+from dadguard.decompiler import writer as dadguard_writer
 from dadguard.core.analysis.analysis import MethodAnalysis
 import dadguard.core.androconf as androconf
 import functools
@@ -199,12 +200,27 @@ def patched_static_instruction_visit(self, visitor):
     )
 
 
+_orig_writer_visit_constant = decompile.Writer.visit_constant
+def patched_writer_visit_constant(self, cst):
+    if not isinstance(cst, str):
+        return _orig_writer_visit_constant(self, cst)
+    value = dadguard_writer.string(cst)
+    self.write(value)
+    self.write_ext(("CONSTANT_STRING", value, cst))
+
+
+def patched_base_class_visit(self, visitor):
+    return visitor.visit_base_class(self.cls, data=self.clsdesc or self.cls)
+
+
 dadguard_instruction.InstanceExpression.visit = patched_instance_expression_visit
 dadguard_instruction.InstanceInstruction.visit = patched_instance_instruction_visit
 dadguard_instruction.StaticExpression.visit = patched_static_expression_visit
 dadguard_instruction.StaticInstruction.visit = patched_static_instruction_visit
+dadguard_instruction.BaseClass.visit = patched_base_class_visit
 decompile.Writer.visit_get_static = patched_writer_get_static
 decompile.Writer.visit_put_static = patched_writer_put_static
+decompile.Writer.visit_constant = patched_writer_visit_constant
 # --- End of String/Type Optimizations ---
 
 # We also completely disable ALL dadguard loggers via python's standard logging module
@@ -273,6 +289,20 @@ def _dalvik_class_name(name : str) -> str:
     return name
 
 
+def _dalvik_reference_class(name : str):
+    name = (name or "").strip()
+    while name.startswith("["):
+        name = name[1:]
+    while name.endswith("[]"):
+        name = name[:-2]
+    if not name or name in {
+        "V", "Z", "B", "S", "C", "I", "J", "F", "D",
+        "void", "boolean", "byte", "short", "char", "int", "long", "float", "double",
+    }:
+        return None
+    return _dalvik_class_name(name)
+
+
 # reuse dadguard daddecompiler's token type, we can extract source' semantics, enhance gui xref ability
 # 20260921 we may extract daddecompiler from dadguard in future, for better development
 def _source_with_member_references(source_ext):
@@ -321,6 +351,35 @@ def _source_with_member_references(source_ext):
                     field.get_descriptor(),
                     True,
                 ))
+            elif kind == "CONSTANT_STRING":
+                raw_value = token[2] if len(token) >= 3 else value[1:-1]
+                references.append((start, offset, "string", "", raw_value, "", False))
+            elif kind in ("CHECKCAST", "NEW_ARRAY", "NEW_ARRAY_FILLED"):
+                type_start = 2 if kind == "CHECKCAST" else 4
+                type_end = value.find(") ", type_start) if kind == "CHECKCAST" else value.rfind("[")
+                if kind == "NEW_ARRAY_FILLED":
+                    type_end = value.rfind(" {")
+                class_name = _dalvik_reference_class(value[type_start:type_end])
+                if class_name is not None:
+                    references.append((
+                        start + type_start, start + type_end,
+                        "class", class_name, "", "", False,
+                    ))
+            elif kind in (
+                "VARIABLE_TYPE", "EXCEPTION_TYPE",
+                "FIELD_TYPE", "ARG_TYPE", "PROTOTYPE_TYPE",
+                "NAME_SUPERCLASS", "NAME_INTERFACE", "NAME_PROTOTYPE",
+                "NAME_BASE_CLASS", "NAME_CLASS_NEW",
+            ):
+                raw_name = token[2] if len(token) >= 3 else value
+                declaration = kind == "NAME_PROTOTYPE"
+                if declaration and len(token) >= 3 and token[2]:
+                    raw_name = f"{token[2]}.{value}"
+                class_name = _dalvik_reference_class(raw_name)
+                if class_name is not None:
+                    references.append((
+                        start, offset, "class", class_name, "", "", declaration,
+                    ))
             elif kind in ("NAME_CLASS_INSTANCE", "NAME_CLASS_ASSIGNMENT") and len(token) >= 3:
                 field = token[2]
                 references.append((
@@ -333,9 +392,14 @@ def _source_with_member_references(source_ext):
             elif kind in ("GET_STATIC", "PUT_STATIC") and len(token) >= 3:
                 field = token[2]
                 field_start = offset - len(field.name)
+                class_name = _dalvik_class_name(field.clsdesc)
+                if field_start > start:
+                    references.append((
+                        start, field_start - 1, "class", class_name, "", "", False,
+                    ))
                 references.append((
                     field_start, offset, "field",
-                    _dalvik_class_name(field.clsdesc),
+                    class_name,
                     field.name,
                     field.ftype,
                     False,

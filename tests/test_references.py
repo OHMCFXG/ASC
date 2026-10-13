@@ -155,6 +155,15 @@ class StringTests(unittest.TestCase):
         struct.pack_into('<II', data, 56, 0, 0)
         self.assertEqual(self.locate(data, 'token'), set())
 
+    def test_non_bmp_string_is_searchable(self):
+        # the region holds MUTF-8, where a code point above the BMP is stored as a
+        # surrogate pair (CESU-8), so a UTF-8 pattern never matches it
+        from test_mutf8_strings import _make_class_dex
+        emoji = '\U0001f600'
+        data = _make_class_dex(['Ll/' + emoji + ';'])
+        self.assertEqual(self.locate(data, emoji), {0})
+        self.assertEqual(self.locate(data, 'Ll/'), {0})
+
 
 class DependencyTests(unittest.TestCase):
     def test_reference_search_without_site_packages(self):

@@ -359,7 +359,19 @@ class ApkHandler:
         return fp, mm
 
     def get_class_dex(self, dalvik_class : str):
+        # string_data_item is MUTF-8, not UTF-8: a code point above the BMP is
+        # stored as a surrogate pair (CESU-8), so a UTF-8-encoded query can never
+        # byte-match it and such a class was unreachable. MUTF-8 also keeps byte
+        # order aligned with the table's UTF-16 code-unit order, which the binary
+        # search in _find_type_idx relies on.
+        #
+        # The two encodings differ only above the BMP (and for an embedded NUL,
+        # which a descriptor cannot hold), so only such a name pays for the encoder
+        # and an ordinary lookup stays on the plain UTF-8 path.
         target_bytes = dalvik_class.encode("utf-8")
+        if any(ord(ch) > 0xFFFF for ch in dalvik_class):
+            from mutf8 import encode_modified_utf8
+            target_bytes = encode_modified_utf8(dalvik_class)
         t_start = time.perf_counter()
         fp, mm = self._open_apk()
         try:
@@ -415,6 +427,10 @@ class ApkHandler:
             fp.close()
 
     def list_classes(self, prefix : str = None):
+        # deferred like the ProcessPoolExecutor import in for_each_findrefs, so the
+        # getclass path does not pay for it
+        from droidasc.asc_core.utils.tinydex import _decode_mutf8_fallback
+
         if self.max_workers <= 0:
             raise ValueError("Worker count must be greater than zero")
         if prefix is not None:
@@ -424,6 +440,15 @@ class ApkHandler:
             if not prefix.startswith("L"):
                 prefix = "L" + prefix.replace(".", "/")
         prefix_bytes = prefix.encode("ascii") if prefix and prefix.isascii() else None
+
+        def decode_name(raw_name : bytes) -> str:
+            # string_data_item is MUTF-8, so strict UTF-8 rejects a surrogate pair
+            # above the BMP; decode exactly as DEX.get_string does, or a listing
+            # names a class differently from every other command
+            try:
+                return raw_name.decode("utf-8")
+            except UnicodeDecodeError:
+                return _decode_mutf8_fallback(raw_name)
 
         def list_dex_classes(buf):
             if len(buf) < 0x70 or buf[:3] != b"dex":
@@ -464,9 +489,9 @@ class ApkHandler:
 
                 if prefix_bytes is not None:
                     if raw_name.startswith(prefix_bytes):
-                        append(raw_name.decode("utf-8", errors="replace"))
+                        append(decode_name(raw_name))
                 else:
-                    name = raw_name.decode("utf-8", errors="replace")
+                    name = decode_name(raw_name)
                     if prefix is None or name.startswith(prefix):
                         append(name)
             return names

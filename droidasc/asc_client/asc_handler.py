@@ -70,20 +70,28 @@ class AscHandler:
         new_dex_bytes = manager.extract_and_rebuild(dalvik_class)
         return _decompile_dex_bytes_with_metadata(new_dex_bytes, dalvik_class)
 
-    def _format_method(self, dex, midx : int) -> str:
+    def _format_method(self, dex, midx : int, include_descriptor : bool = False) -> str:
         method = dex.methods[midx]
-        return f"{method.cls.fullname}->{method.name}"
+        ret = f"{method.cls.fullname}->{method.name}"
+        if not include_descriptor:
+            return ret
+        proto = method.prototype
+        descriptor = "(" + "".join(item.descriptor for item in proto.parameters_type) + ")"
+        descriptor += dex.get_type(proto.return_type_idx).descriptor
+        return ret + descriptor
 
-    def _format_matched_name(self, dex, find_type : str, idx : int) -> str:
+    def _format_matched_name(
+        self, dex, find_type : str, idx : int, include_descriptor : bool = False,
+    ) -> str:
         if find_type == "string":
             return str(dex.strings[idx])
         if find_type == "type":
             return dex.types[idx].descriptor
         if find_type == "method":
-            method = dex.methods[idx]
-            return f"{method.cls.fullname}->{method.name}"
+            return self._format_method(dex, idx, include_descriptor=include_descriptor)
         field = dex.fields[idx]
-        return f"{field.cls.fullname}->{field.name}"
+        ret = f"{field.cls.fullname}->{field.name}"
+        return f"{ret}:{field.type.descriptor}" if include_descriptor else ret
 
     def findrefs(self, dex_name : str, dex_buf : bytes, find_type : str, find : dict, aggregate : bool = True) -> list:
         from droidasc.asc_core.findrefs.findrefs_manager import FindRefManager
@@ -96,6 +104,7 @@ class AscHandler:
         mids = query[find_type]
         if not aggregate:
             ret = []
+            occurrences = defaultdict(int)
             for i in range(len(mids)):
                 midx = mids[i]
                 if midx is None:
@@ -105,10 +114,16 @@ class AscHandler:
                     midxs = midx
                 else:
                     midxs = [midx]
-                matched = self._format_matched_name(dex, find_type, idx)
+                matched = self._format_matched_name(
+                    dex, find_type, idx, include_descriptor=True
+                )
                 for mid in midxs:
+                    key = (mid, idx)
+                    occurrence = occurrences[key]
+                    occurrences[key] += 1
                     ret.append(
-                        f"{dex_name} | {self._format_method(dex, mid)} | matched=({matched})"
+                        f"{dex_name} | {self._format_method(dex, mid, include_descriptor=True)} | "
+                        f"matched=({matched}) | occurrence={occurrence}"
                     )
             return ret
 

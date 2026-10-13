@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "droidasc"
-version = "0.1.1.post4"
+version = "0.1.1.post5"
 description = "ASC is a super FAST python Android Decompiler for Agents/Mobile Researchers"
 readme = "README.md"
 license = "Apache-2.0"
@@ -12,7 +12,7 @@ license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = [
     "axml>=0.0.2",
-    "mutf8>=1.1.0",
+    "mutf8>=1.0.6",
 ]
 
 [project.optional-dependencies]

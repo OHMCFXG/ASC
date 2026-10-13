@@ -280,6 +280,43 @@ def find_member_declaration(references, member_type : str, member_name : str, de
     return None
 
 
+def find_search_reference(
+    source : str, references, method_name : str, method_descriptor : str,
+    target_type : str, target_class : str, target_name : str,
+    target_descriptor : str, occurrence : int = 0,
+):
+    declaration = find_member_declaration(
+        references, "method", method_name, method_descriptor
+    )
+    if declaration is None:
+        declaration = find_member_declaration(references, "method", method_name, "")
+    if declaration is None:
+        return None
+    method_range = find_method_range(source, declaration[0])
+    if method_range is None:
+        return None
+
+    def matches(item):
+        if not (method_range[0] <= item[0] < method_range[1]) or item[6]:
+            return False
+        if item[2] != target_type:
+            return False
+        if target_type == "string":
+            return item[4] == target_name
+        if target_type == "class":
+            return item[3] == target_class
+        return (
+            item[3] == target_class
+            and item[4] == target_name
+            and (not target_descriptor or item[5] == target_descriptor)
+        )
+
+    matches_in_method = [item for item in references if matches(item)]
+    if occurrence < 0 or occurrence >= len(matches_in_method):
+        return None
+    return matches_in_method[occurrence]
+
+
 def linkable_member_spans(references, available_classes):
     return [
         (item[0], item[1])

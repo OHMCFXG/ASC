@@ -46,13 +46,20 @@ class StringLocator(BaseLocator):
 
     def _match_string_offset(self, string : str):
         buf = self.buf
-        string = string.encode('utf-8')
+        # the region below holds MUTF-8, where a code point above the BMP is stored
+        # as a surrogate pair (CESU-8) that a UTF-8 pattern can never match. The two
+        # encodings agree below the BMP, so only such a pattern pays for the encoder
+        # and an ordinary search stays on the plain UTF-8 path.
+        pattern_bytes = string.encode('utf-8')
+        if any(ord(ch) > 0xFFFF for ch in string):
+            from mutf8 import encode_modified_utf8
+            pattern_bytes = encode_modified_utf8(string)
         strdata_start = self.strdata_start
         strdata_end = self.strdata_end
         submem = buf[strdata_start: strdata_end]
         
         mm = submem.obj
-        pattern = re.compile(string)
+        pattern = re.compile(pattern_bytes)
         
         # offsets = []
         for match in pattern.finditer(submem):

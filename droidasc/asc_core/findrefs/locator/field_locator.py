@@ -48,6 +48,9 @@ class FieldLocator(BaseLocator):
         right = type_ids_size - 1
         buf = self.buf
         strings = self.dex.strings
+        # see MethodLocator._find_type_idx_precisely: type_ids is sorted by UTF-16
+        # code unit, so the search has to compare in that order, not Python's
+        key = clz.encode('utf-16-be', 'surrogatepass')
 
         while left <= right:
             mid = (left + right) >> 1
@@ -55,7 +58,7 @@ class FieldLocator(BaseLocator):
             desc = strings[desc_idx]
             if desc == clz:
                 return mid
-            if desc < clz:
+            if desc.encode('utf-16-be', 'surrogatepass') < key:
                 left = mid + 1
             else:
                 right = mid - 1
@@ -108,7 +111,12 @@ class FieldLocator(BaseLocator):
 
         if clz is None:
             if field_precise:
-                return {fid for fid, item in enumerate(self.dex.fields) if item.name == field}
+                # see MethodLocator.locate: dex.fields is a proxy without __iter__,
+                # so enumerate() walks off the field table instead of stopping at it
+                return {
+                    fid for fid in range(len(self.dex.fields))
+                    if self.dex.fields[fid].name == field
+                }
             name_idxs = self.str_locator.locate(field)
             field_maps = self.field_maps
             ret = set()

@@ -14,6 +14,7 @@ from droidasc.asc_client.gui.source_edit import (
     index_to_offset,
     is_identifier,
     find_member_declaration,
+    find_search_reference,
     linkable_member_spans,
     member_reference_at_offset,
     remap_ranges_after_replacements,
@@ -172,7 +173,7 @@ class SearchDialog:
         if not selection:
             return
         row = self.rows[int(selection[0])]
-        self.app.open_class(row["class_name"])
+        self.app.open_search_result(row, self.find_type)
 
     def _append_visible_rows(self, rows):
         if not rows:
@@ -841,6 +842,45 @@ class AscGuiApp:
         tab = self.editor_tabs[idx]
         if tab.loading or tab.error or not tab.source:
             return
+        member_type = target[1]
+        if member_type == "search":
+            (
+                _class_name, _kind, method_name, method_descriptor,
+                target_type, target_class, target_name, target_descriptor, occurrence,
+            ) = target
+            source = tab.edited_source or tab.source
+            references = tab.rendered_member_references
+            if tab.comments:
+                source, _comment_spans = self._render_tab_source(tab)
+                references = tab.rendered_member_references
+            reference = find_search_reference(
+                source, references, method_name, method_descriptor,
+                target_type, target_class, target_name, target_descriptor, occurrence,
+            )
+            exact = reference is not None
+            if reference is None:
+                reference = find_member_declaration(
+                    references, "method", method_name, method_descriptor
+                )
+            if reference is None:
+                reference = find_member_declaration(references, "method", method_name, "")
+            self._pending_member_navigation = None
+            if reference is None:
+                self.status_var.set(f"Search location not found: {dalvik_to_dot(dalvik_class)}->{method_name}")
+                return
+            start = reference[0]
+            index = f"1.0+{start}c"
+            self.source_text.mark_set("insert", index)
+            self.source_text.see(index)
+            tab.insert_index = self.source_text.index("insert")
+            tab.yview = self.source_text.yview()
+            self._highlight_active_line()
+            self._highlight_related_identifier(tab.insert_index)
+            suffix = "" if exact else " (exact expression unavailable)"
+            self.status_var.set(
+                f"Opened search hit {dalvik_to_dot(dalvik_class)}->{method_name}{suffix}"
+            )
+            return
         _class_name, member_type, member_name, descriptor = target
         reference = find_member_declaration(
             tab.rendered_member_references, member_type, member_name, descriptor
@@ -857,7 +897,10 @@ class AscGuiApp:
         tab.yview = self.source_text.yview()
         self._highlight_active_line()
         self._highlight_related_identifier(tab.insert_index)
-        self.status_var.set(f"Opened declaration {dalvik_to_dot(dalvik_class)}->{member_name}")
+        if member_type == "class":
+            self.status_var.set(f"Opened class {dalvik_to_dot(dalvik_class)}")
+        else:
+            self.status_var.set(f"Opened declaration {dalvik_to_dot(dalvik_class)}->{member_name}")
 
     def _on_source_key_press(self, event):
         if event.state & 0x0004:
@@ -892,6 +935,9 @@ class AscGuiApp:
             self.status_var.set("Place the cursor on a method or field name to find its references")
             return "break"
         _start, _end, member_type, class_name, member_name, *_metadata = reference
+        if member_type not in ("method", "field"):
+            self.status_var.set("Place the cursor on a method or field name to find its references")
+            return "break"
 
         self.search_type_var.set(f"{member_type} refs")
         self.search_value_var.set(member_name)
@@ -1640,6 +1686,24 @@ class AscGuiApp:
                 self.events.put(("source_error", dalvik_class, f"Decompile failed: {e}"))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def open_search_result(self, row, find_type : str):
+        class_name = row["class_name"]
+        target_type = row.get("target_type", "")
+        if find_type in ("method", "field"):
+            self._pending_member_navigation = (
+                class_name, target_type, row.get("target_name", ""),
+                row.get("target_descriptor", ""),
+            )
+        else:
+            self._pending_member_navigation = (
+                class_name, "search", row.get("method_name", ""),
+                row.get("method_descriptor", ""), target_type,
+                row.get("target_class", ""), row.get("target_name", ""),
+                row.get("target_descriptor", ""), row.get("occurrence", 0),
+            )
+        self.open_class(class_name)
+        self._complete_pending_member_navigation(class_name)
 
     def _start_search(self, exact_member : bool = False):
         if self.store is None:

@@ -101,15 +101,47 @@ def build_find_query(
     return find_type, {find_type: {"class": [class_name, not fuzzy_class], find_type: member}}
 
 
-def parse_result_line(line : str):
+def _split_member_text(text : str, member_type : str):
+    class_name, member_text = text.split("->", 1)
+    if member_type == "method":
+        split_at = member_text.find("(")
+    else:
+        split_at = member_text.rfind(":")
+    if split_at < 0:
+        return class_name, member_text, ""
+    if member_type == "method":
+        return class_name, member_text[:split_at], member_text[split_at:]
+    return class_name, member_text[:split_at], member_text[split_at + 1:]
+
+
+def parse_result_line(line : str, find_type : str = ""):
     dex_name, method_text, matched_text = line.split(" | ", 2)
-    class_name = method_text.split("->", 1)[0]
+    matched_text, sep, occurrence_text = matched_text.rpartition(" | occurrence=")
+    occurrence = int(occurrence_text) if sep and occurrence_text.isdigit() else 0
+    if not sep:
+        matched_text = occurrence_text
+    class_name, method_name, method_descriptor = _split_member_text(method_text, "method")
+    matched_value = matched_text[len("matched=("):-1] if matched_text.startswith("matched=(") else matched_text
+    target_class = ""
+    target_name = matched_value
+    target_descriptor = ""
+    if find_type in ("method", "field"):
+        target_class, target_name, target_descriptor = _split_member_text(matched_value, find_type)
+    elif find_type == "type":
+        target_class = matched_value
     return {
         "dex_name": dex_name,
         "class_name": class_name,
         "class_display": dalvik_to_dot(class_name),
         "method_text": method_text,
+        "method_name": method_name,
+        "method_descriptor": method_descriptor,
         "matched_text": matched_text,
+        "target_type": "class" if find_type == "type" else find_type,
+        "target_class": target_class,
+        "target_name": target_name,
+        "target_descriptor": target_descriptor,
+        "occurrence": occurrence,
         "line": line,
     }
 
@@ -296,13 +328,23 @@ class GuiDexStore:
                 for midx in sorted(member_idxs):
                     method = dex.methods[midx]
                     class_name = method.cls.fullname
-                    method_text = f"{class_name}->{method.name}"
+                    proto = method.prototype
+                    descriptor = "(" + "".join(item.descriptor for item in proto.parameters_type) + ")"
+                    descriptor += dex.get_type(proto.return_type_idx).descriptor
+                    method_text = f"{class_name}->{method.name}{descriptor}"
                     dex_rows.append({
                         "dex_name": dex_name,
                         "class_name": class_name,
                         "class_display": dalvik_to_dot(class_name),
                         "method_text": method_text,
+                        "method_name": method.name,
+                        "method_descriptor": descriptor,
                         "matched_text": f"method=({method.name})",
+                        "target_type": "method",
+                        "target_class": class_name,
+                        "target_name": method.name,
+                        "target_descriptor": descriptor,
+                        "occurrence": 0,
                         "line": method_text,
                     })
                 return len(member_idxs), dex_rows
@@ -318,7 +360,14 @@ class GuiDexStore:
                     "class_name": class_name,
                     "class_display": dalvik_to_dot(class_name),
                     "method_text": method_text,
+                    "method_name": field.name,
+                    "method_descriptor": "",
                     "matched_text": f"field=({field.name})",
+                    "target_type": "field",
+                    "target_class": class_name,
+                    "target_name": field.name,
+                    "target_descriptor": field.type.descriptor,
+                    "occurrence": 0,
                     "line": method_text,
                 })
             return len(member_idxs), dex_rows
@@ -406,7 +455,7 @@ class GuiDexStore:
             if len(shown) < _MAX_UI_RESULTS:
                 remain = _MAX_UI_RESULTS - len(shown)
                 for line in lines[:remain]:
-                    row = parse_result_line(line)
+                    row = parse_result_line(line, find_type)
                     shown.append(row)
                     batch_rows.append(row)
             if batch_rows and result_callback is not None:
@@ -495,7 +544,7 @@ class GuiDexStore:
                 if len(shown) < _MAX_UI_RESULTS:
                     remain = _MAX_UI_RESULTS - len(shown)
                     for line in lines[:remain]:
-                        row = parse_result_line(line)
+                        row = parse_result_line(line, find_type)
                         shown.append(row)
                         batch_rows.append(row)
                 if batch_rows and result_callback is not None:

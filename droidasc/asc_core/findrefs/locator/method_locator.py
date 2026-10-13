@@ -47,6 +47,13 @@ class MethodLocator(BaseLocator):
         right = type_ids_size - 1
         buf = self.buf
         strings = self.dex.strings
+        # type_ids is sorted by UTF-16 code unit, which is not Python's order above
+        # the BMP: a surrogate pair is 0xD800-0xDFFF, so U+10000 sorts before
+        # U+E000, while Python compares those two the other way round. Comparing
+        # string values prunes the wrong half and misses entries; comparing the
+        # UTF-16BE encoding compares in the table's own order. surrogatepass because
+        # a malformed dex can decode to lone surrogates, which utf-16 refuses.
+        key = clz.encode('utf-16-be', 'surrogatepass')
 
         while left <= right:
             mid = (left + right) >> 1
@@ -54,7 +61,7 @@ class MethodLocator(BaseLocator):
             desc = strings[desc_idx]
             if desc == clz:
                 return mid
-            if desc < clz:
+            if desc.encode('utf-16-be', 'surrogatepass') < key:
                 left = mid + 1
             else:
                 right = mid - 1
@@ -107,7 +114,13 @@ class MethodLocator(BaseLocator):
 
         if clz is None:
             if method_precise:
-                return {mid for mid, item in enumerate(self.dex.methods) if item.name == method}
+                # dex.methods is a proxy without __iter__, so enumerate() falls back
+                # to the sequence protocol and never sees an IndexError - it walks off
+                # the method table into garbage. Bound the walk by the table size.
+                return {
+                    mid for mid in range(len(self.dex.methods))
+                    if self.dex.methods[mid].name == method
+                }
             name_idxs = self.str_locator.locate(method)
             method_maps = self.method_maps
             ret = set()
