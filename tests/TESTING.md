@@ -4,6 +4,7 @@ Use Python 3.11+ and install `requirements.txt` in a virtual environment.
 
 ```sh
 python tests/run_tests.py --require-decompiler
+python tests/run_tests.py --require-decompiler --suite gui
 python tests/benchmark_startup.py --samples 9
 python tests/benchmark_reference.py --samples 9
 ```
@@ -16,7 +17,14 @@ without site packages. `listclass` coverage includes local class-table
 enumeration, stable DEX definition order, normalized package-prefix filtering,
 stored/Deflate multidex APKs, DEX 041 containers, malformed indices, operation
 without site packages, and a large-tail Deflate fixture. It does not open GUI
-windows.
+windows unless the `gui` suite or the unfiltered `all` suite is selected. The
+GUI suite covers the backend store/search workers, source editing and
+navigation, application layout, package tree, tab bar, dialogs, and themes.
+On headless Linux, run it under a virtual display:
+
+```sh
+xvfb-run -a python tests/run_tests.py --require-decompiler --suite gui
+```
 
 The synthetic startup gate measures `getclass --debug` in nine fresh interpreters.
 Its median budgets are 100 ms internal time and 250 ms wall time on Linux CI.
@@ -43,6 +51,7 @@ from `artifacts/startup/` and `artifacts/reference/` even when a gate fails.
 ```sh
 python tests/run_tests.py --require-decompiler --suite unit
 python tests/run_tests.py --require-decompiler --suite integration
+python tests/run_tests.py --require-decompiler --suite gui
 python tests/benchmark_compare.py --baseline /path/to/base-checkout --samples 31
 ```
 

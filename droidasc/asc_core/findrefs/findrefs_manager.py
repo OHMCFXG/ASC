@@ -5,6 +5,7 @@ from .locator.method_locator import MethodLocator
 from .locator.string_locator import StringLocator
 from .locator.type_locator import TypeLocator
 from .scan.code_item_scan import CodeItemScanner
+from .scan.class_def_item_scan import ClassDefItemScan
 
 
 class FindRefManager:
@@ -17,6 +18,7 @@ class FindRefManager:
         self.field_locator = None
         self.insn_locator = None
         self.code_scanner = None
+        self.class_def_item_scanner = None
 
     def _get_str_locator(self, build = False):
         locator = self.str_locator
@@ -33,7 +35,7 @@ class FindRefManager:
         if locator is None:
             locator = TypeLocator(self.dex)
             locator.set_debug(self.debug)
-            locator.set_str_locator(self._get_str_locator(True))
+            locator.set_str_locator(self._get_str_locator(build))
             self.type_locator = locator
         if build and not locator.parsed:
             locator._build_map()
@@ -78,27 +80,33 @@ class FindRefManager:
             self.code_scanner = scanner
         return scanner
 
-    # find struct: {"string" : "foo", "type" : "bar", "method" : {...}, "field" : {...}}
-    # locate result will overwrite input find in-place, then scanner writes ref mids back into each key
-    def find_ref(self, find : dict, mark = False):
-        has_idx = False
-        if "string" in find:
-            find["string"] = self._get_str_locator(True).locate(find["string"])
-            if find["string"]:
-                has_idx = True
-        if "type" in find:
-            find["type"] = self._get_type_locator(True).locate(find["type"])
-            if find["type"]:
-                has_idx = True
-        if "method" in find:
-            find["method"] = self._get_method_locator(True).locate(find["method"])
-            if find["method"]:
-                has_idx = True
-        if "field" in find:
-            find["field"] = self._get_field_locator(True).locate(find["field"])
-            if find["field"]:
-                has_idx = True
+    def _get_class_def_item_scanner(self):
+        scanner = self.class_def_item_scanner
+        if scanner is None:
+            # precisly locate type id, no need to build string/type map
+            scanner = ClassDefItemScan(self._get_type_locator(False))
+            self.class_def_item_scanner = scanner
+        return scanner
 
+    # find struct: {"string" : "foo", "type" : "bar", "method" : {...}, "field" : {...}, "extends" : "Lfoo;"}
+    # locate result will overwrite input find in-place, then scanner writes ref mids back into each key
+    # extends writes class idx back into find and returns directly, dont scan code item
+    def find_ref(self, find : dict, mark = False, group = False):
+        if group:
+            return self._find_ref_grouped(find, mark)
+        # non-group contract: extends/impl are class-def lookups that short-circuit
+        # the opcode scan, so a plain call sees only that subclass result
+        if "extends" in find:
+            find["extends"] = self._get_class_def_item_scanner().scan_extends(find["extends"])
+            return find["extends"]
+        if "impl" in find:
+            find["impl"] = self._get_class_def_item_scanner().scan_implements(find["impl"])
+            return find["impl"]
+
+        # non-group keeps the original contract: located idxs are written back
+        # into find in place, and if nothing is located every ref key becomes []
+        refs, has_idx = self._collect_refs(find)
+        find.update(refs)
         if not find:
             return
         if not has_idx:
@@ -108,3 +116,37 @@ class FindRefManager:
 
         self._get_code_scanner().scan(find, mark)
         return self._get_code_scanner().mark_idx
+
+    # group=True: every queried key comes back as one list in the result dict,
+    # 1:1 with the input. extends/impl resolve the subclass set from class_def_item;
+    # the rest are opcode references. Only ref keys ever enter the code-item scan.
+    def _find_ref_grouped(self, find : dict, mark = False):
+        result = {}
+        if "extends" in find:
+            result["extends"] = self._get_class_def_item_scanner().scan_extends(find["extends"])
+        if "impl" in find:
+            result["impl"] = self._get_class_def_item_scanner().scan_implements(find["impl"])
+
+        refs, has_idx = self._collect_refs(find)
+        if not has_idx:
+            # no located idx anywhere -> every ref key is an empty list
+            result.update({key: [] for key in refs})
+            return result
+        self._get_code_scanner().scan(refs, mark)
+        result.update(refs)
+        return result
+
+    # locate each opcode-ref key into {type: idx_set}; returns the located keys
+    # and whether any of them hit. find is not modified here.
+    def _collect_refs(self, find : dict):
+        refs = {}
+        if "string" in find:
+            refs["string"] = self._get_str_locator(True).locate(find["string"])
+        if "type" in find:
+            refs["type"] = self._get_type_locator(True).locate(find["type"])
+        if "method" in find:
+            refs["method"] = self._get_method_locator(True).locate(find["method"])
+        if "field" in find:
+            refs["field"] = self._get_field_locator(True).locate(find["field"])
+        has_idx = any(refs.values())
+        return refs, has_idx

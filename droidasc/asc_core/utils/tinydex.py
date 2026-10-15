@@ -327,6 +327,28 @@ class DexClass:
         self._parse_class_data()
         return self._fields
 
+    @property
+    def superclass_idx(self):
+        if not hasattr(self, '_superclass_idx'):
+            self._superclass_idx = _STRUCT_I.unpack_from(self.dex.buf, self._class_def_off + 8)[0]
+        return self._superclass_idx
+
+    @property
+    def interface_type_idxs(self) -> list:
+        if not hasattr(self, '_interface_type_idxs'):
+            interfaces_off = _STRUCT_I.unpack_from(self.dex.buf, self._class_def_off + 12)[0]
+            if interfaces_off == 0:
+                self._interface_type_idxs = []
+            else:
+                size = _STRUCT_I.unpack_from(self.dex.buf, interfaces_off)[0]
+                idxs = []
+                off = interfaces_off + 4
+                for _ in range(size):
+                    idxs.append(_STRUCT_H.unpack_from(self.dex.buf, off)[0])
+                    off += 2
+                self._interface_type_idxs = idxs
+        return self._interface_type_idxs
+
 class DEX:
     @staticmethod
     def parse(buf, name=""):

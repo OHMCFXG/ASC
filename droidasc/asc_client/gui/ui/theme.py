@@ -91,13 +91,23 @@ class ThemeManager:
         self.style.configure(".", background=t["panel_bg"], foreground=t["text"])
         self.style.configure("TFrame", background=t["panel_bg"])
         self.style.configure("TLabel", background=t["panel_bg"], foreground=t["text"])
-        self.style.configure("TButton", background=t["surface_alt"], foreground=t["text"], padding=(5, 1))
+        self.style.configure(
+            "TButton",
+            background=t["surface_alt"],
+            foreground=t["text"],
+            padding=(5, 1),
+        )
         self.style.map(
             "TButton",
             background=[("active", t["tab_hover"]), ("disabled", t["panel_bg"])],
             foreground=[("disabled", t["muted_text"])],
         )
-        self.style.configure("TCheckbutton", background=t["panel_bg"], foreground=t["text"], padding=(2, 1))
+        self.style.configure(
+            "TCheckbutton",
+            background=t["panel_bg"],
+            foreground=t["text"],
+            padding=(2, 1),
+        )
         self.style.map(
             "TCheckbutton",
             background=[("active", t["panel_bg"])],

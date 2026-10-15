@@ -67,6 +67,51 @@ class ReferenceTests(unittest.TestCase):
         self.assertTrue(any('->first' in line for line in lines))
         self.assertTrue(any('->second' in line for line in lines))
 
+    def test_group_returns_every_queried_type_keyed(self):
+        from droidasc.asc_core.findrefs.findrefs_manager import FindRefManager
+        dex = DEX.parse(memoryview(make_dex()), 'fixture.dex')
+        # every queried key comes back in the result dict, 1:1 with the input
+        query = {'string': 'token', 'type': 'Lexample/Test;', 'method': {'class': None, 'method': 'first'}}
+        result = FindRefManager(dex).find_ref(query, True, group=True)
+        self.assertEqual(set(result), {'string', 'type', 'method'})
+        # scan writes through into the returned group; the fixture hosts a token
+        # string reference, so at least that group is non-empty
+        self.assertTrue(result['string'])
+        # non-group keeps the previous contract (flat mark_idx)
+        mark_idx = FindRefManager(dex).find_ref({'string': 'token'}, True)
+        self.assertIsNotNone(mark_idx)
+
+    def test_group_merges_extends_with_ref_keys(self):
+        from droidasc.asc_core.findrefs.findrefs_manager import FindRefManager
+        dex = DEX.parse(memoryview(make_dex()), 'fixture.dex')
+        query = {'extends': 'Ljava/lang/Object;', 'string': 'token'}
+        result = FindRefManager(dex).find_ref(query, True, group=True)
+        # extends joins the group result and stays a separate key from the ref scan
+        self.assertEqual(set(result), {'extends', 'string'})
+        self.assertTrue(result['extends'])
+        self.assertTrue(result['string'])
+        # a plain call still short-circuits to the subclass list only
+        plain = FindRefManager(dex).find_ref({'extends': 'Ljava/lang/Object;'})
+        self.assertEqual(plain, result['extends'])
+
+    def test_cli_extends_and_impl_format(self):
+        # Scan the fixture's Test class through the CLI-style findrefs wrapper:
+        # output must carry the dex name, the type_id fullname, and the verb.
+        extends = AscHandler().findrefs(
+            'fixture.dex', make_dex(), 'extends', {'extends': 'Ljava/lang/Object;'}
+        )
+        self.assertTrue(extends)
+        self.assertTrue(any(
+            line.startswith('fixture.dex | ')
+            and ' extends Ljava/lang/Object;' in line and 'Lexample/Test;' in line
+            for line in extends
+        ), extends)
+        # impl of a target no class implements yields no rows, but no crash
+        impl = AscHandler().findrefs(
+            'fixture.dex', make_dex(), 'impl', {'impl': 'Ljava/io/Serializable;'}
+        )
+        self.assertEqual(impl, [])
+
 
 class InsnVerifyPatternTests(unittest.TestCase):
     """INSN_VERIFY must compile on every Python the project declares support for."""

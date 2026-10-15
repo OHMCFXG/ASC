@@ -16,6 +16,8 @@ def _dummy_axml_logger():
     dummy_logger = _DummyLogger()
     logging_module = types.ModuleType("axml.helper.logging")
     logging_module.LOGGER = dummy_logger
+    # axml imports this optional logging module by its fully qualified name.
+    # Install the stub before importing AXMLPrinter to silence library output.
     sys.modules["axml.helper.logging"] = logging_module
 
     # axml modules cache LOGGER with a module-level import.

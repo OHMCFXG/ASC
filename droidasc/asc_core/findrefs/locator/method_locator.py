@@ -39,34 +39,6 @@ class MethodLocator(BaseLocator):
         self.parsed = True
         self._debug_log("build_map", t_start, method_ids_size)
 
-    # which is different with type locator, this func for precise clz name
-    # while type locator is for fuzzy search
-    def _find_type_idx_precisely(self, clz : str):
-        left = 0
-        type_ids_off, type_ids_size = self.header.types
-        right = type_ids_size - 1
-        buf = self.buf
-        strings = self.dex.strings
-        # type_ids is sorted by UTF-16 code unit, which is not Python's order above
-        # the BMP: a surrogate pair is 0xD800-0xDFFF, so U+10000 sorts before
-        # U+E000, while Python compares those two the other way round. Comparing
-        # string values prunes the wrong half and misses entries; comparing the
-        # UTF-16BE encoding compares in the table's own order. surrogatepass because
-        # a malformed dex can decode to lone surrogates, which utf-16 refuses.
-        key = clz.encode('utf-16-be', 'surrogatepass')
-
-        while left <= right:
-            mid = (left + right) >> 1
-            desc_idx = _STRUCT_I.unpack_from(buf, type_ids_off + (mid << 2))[0]
-            desc = strings[desc_idx]
-            if desc == clz:
-                return mid
-            if desc.encode('utf-16-be', 'surrogatepass') < key:
-                left = mid + 1
-            else:
-                right = mid - 1
-        return -1
-
     def _collect_clz_mids(self, type_idxs) -> set:
         ret = set()
         clz_maps = self.clz_maps
@@ -133,7 +105,7 @@ class MethodLocator(BaseLocator):
             return ret
 
         if clz_precise:
-            type_idx = self._find_type_idx_precisely(clz)
+            type_idx = self.type_locator._find_type_idx_precisely(clz)
             if type_idx == -1:
                 self._debug_log("locate", t_start, 0)
                 return set()

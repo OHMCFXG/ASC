@@ -1,16 +1,17 @@
 import unittest
 from types import SimpleNamespace
 
-from droidasc.asc_client.gui.app import AscGuiApp
-from droidasc.asc_client.gui.runtime import build_find_query
-from droidasc.asc_client.gui.text_utils import decode_java_unicode_escapes_with_ranges
-from droidasc.asc_client.gui.widgets import EditorTab
-from droidasc.asc_client.gui.source_edit import (
+from droidasc.asc_client.gui.backend.search import build_find_query
+from droidasc.asc_client.gui.editor.controller import EditorController
+from droidasc.asc_client.gui.editor.source import (
+    decode_java_unicode_escapes_with_ranges,
     find_member_declaration,
     linkable_member_spans,
     member_reference_at_offset,
     remap_ranges_after_replacements,
 )
+from droidasc.asc_client.gui.editor.view import EditorView
+from droidasc.asc_client.gui.state import EditorTab
 from droidasc.asc_core.findrefs.findrefs_manager import FindRefManager
 from droidasc.asc_core.utils.decompiler import _source_with_member_references
 from droidasc.asc_core.utils.tinydex import DEX
@@ -77,7 +78,7 @@ def _text_index(text, offset):
     return f"{line}.{offset - line_start}"
 
 
-def _make_app(source, references, offset):
+def _make_controller(source, references, offset):
     tab = EditorTab(
         dalvik_class="Lexample/Test;",
         title="Test",
@@ -86,19 +87,19 @@ def _make_app(source, references, offset):
         member_references=references,
     )
     started = []
-    app = SimpleNamespace(
-        _active_tab=lambda: tab,
-        source_text=SimpleNamespace(index=lambda _mark: _text_index(source, offset)),
-        search_type_var=_Value(),
-        search_value_var=_Value(),
-        search_class_var=_Value(),
-        fuzzy_class_var=_Value(True),
-        status_var=_Value(),
-        _on_search_type_changed=lambda: None,
-        _start_search=lambda **kwargs: started.append(kwargs),
+    view = SimpleNamespace(
+        text=SimpleNamespace(index=lambda _mark: _text_index(source, offset)),
     )
-    app._member_at_index = lambda index: AscGuiApp._member_at_index(app, index)
-    return app, started
+    view.member_at_index = lambda active_tab, index: EditorView.member_at_index(
+        view, active_tab, index
+    )
+    controller = SimpleNamespace(
+        active_tab=lambda: tab,
+        view=view,
+        set_status=_Value().set,
+        start_reference_search=lambda *args: started.append(args),
+    )
+    return controller, started
 
 
 class SourceEditTests(unittest.TestCase):
@@ -106,16 +107,16 @@ class SourceEditTests(unittest.TestCase):
         calls = []
         frame = _FindWidget()
         entry = _FindWidget()
-        app = SimpleNamespace(
-            _hide_member_links=lambda: calls.append("hide-links"),
-            editor_find_frame=frame,
-            editor_find_entry=entry,
-            editor_find_var=_Value("needle"),
-            _last_editor_find_text="",
-            _refresh_editor_find_marks=lambda reset_cursor: calls.append(("refresh", reset_cursor)),
+        view = SimpleNamespace(
+            hide_member_links=lambda: calls.append("hide-links"),
+            find_frame=frame,
+            find_entry=entry,
+            find_var=_Value("needle"),
+            _last_find_text="",
+            refresh_find_marks=lambda reset_cursor: calls.append(("refresh", reset_cursor)),
         )
 
-        result = AscGuiApp._show_editor_find(app)
+        result = EditorView.show_find(view)
 
         self.assertEqual(result, "break")
         self.assertEqual(calls[0], "hide-links")
@@ -135,7 +136,7 @@ class SourceEditTests(unittest.TestCase):
             ],
         )
 
-        rendered, _comment_spans = AscGuiApp._render_tab_source(SimpleNamespace(), tab)
+        rendered, _comment_spans = EditorView.render_source(SimpleNamespace(), tab)
 
         self.assertEqual(
             rendered[tab.rendered_member_references[0][0]:tab.rendered_member_references[0][1]],
@@ -146,25 +147,58 @@ class SourceEditTests(unittest.TestCase):
             "second",
         )
 
+    def test_line_comment_restores_cursor_to_commented_line(self):
+        tab = EditorTab(
+            dalvik_class="Lexample/Test;",
+            title="Test",
+            source="first\nsecond\n",
+            loading=False,
+        )
+        shown = []
+        status = _Value()
+        view = SimpleNamespace(
+            remember=lambda active_tab: setattr(active_tab, "insert_index", "9.9"),
+            show_tab=lambda active_tab, classes: shown.append((active_tab, classes)),
+        )
+        controller = SimpleNamespace(
+            view=view,
+            _available_classes=lambda: (),
+            set_status=status.set,
+        )
+
+        EditorController.set_line_comment(controller, tab, 2, "check")
+
+        self.assertEqual(tab.comments, {2: "check"})
+        self.assertEqual(tab.insert_index, "2.0")
+        self.assertEqual(shown, [(tab, ())])
+        self.assertEqual(status.get(), "Updated comment on line 2")
+
     def test_ctrl_click_passes_exact_target_to_navigation(self):
         target = (4, 8, "method", "Lexample/Target;", "call", "(I)V", False)
         opened = []
         completed = []
-        app = SimpleNamespace(
-            source_text=_NavigationText("1.5"),
-            _member_at_index=lambda _index: target,
-            store=SimpleNamespace(class_to_dex={"Lexample/Target;": "classes.dex"}),
-            status_var=_Value(),
-            _pending_member_navigation=None,
+        controller = SimpleNamespace(
+            view=SimpleNamespace(
+                text=_NavigationText("1.5"),
+                member_at_index=lambda _tab, _index: target,
+            ),
+            active_tab=lambda: None,
+            _store=lambda: SimpleNamespace(
+                class_to_dex={"Lexample/Target;": "classes.dex"}
+            ),
+            set_status=_Value().set,
+            pending_navigation=None,
             open_class=lambda class_name: opened.append(class_name),
-            _complete_pending_member_navigation=lambda class_name: completed.append(class_name),
+            complete_pending_navigation=lambda class_name: completed.append(class_name),
         )
 
-        result = AscGuiApp._open_member_from_click(app, SimpleNamespace(x=10, y=20))
+        result = EditorController._open_member_from_click(
+            controller, SimpleNamespace(x=10, y=20)
+        )
 
         self.assertEqual(result, "break")
         self.assertEqual(
-            app._pending_member_navigation,
+            controller.pending_navigation,
             ("Lexample/Target;", "method", "call", "(I)V"),
         )
         self.assertEqual(opened, ["Lexample/Target;"] )
@@ -178,19 +212,27 @@ class SourceEditTests(unittest.TestCase):
             loading=False, rendered_member_references=[wrong, target],
         )
         text = _NavigationText()
-        app = SimpleNamespace(
-            _pending_member_navigation=("Lexample/Target;", "method", "run", "(I)V"),
-            editor_tabs=[tab],
-            _find_tab_index=lambda _class_name: 0,
-            source_text=text,
-            _highlight_active_line=lambda: None,
-            _highlight_related_identifier=lambda _index: None,
-            status_var=_Value(),
+        controller = SimpleNamespace(
+            pending_navigation=("Lexample/Target;", "method", "run", "(I)V"),
+            tabs=[tab],
+            find_tab_index=lambda _class_name: 0,
+            view=SimpleNamespace(
+                text=text,
+                highlight_active_line=lambda: None,
+                highlight_related_identifier=lambda _tab, _index: None,
+            ),
+            set_status=_Value().set,
+        )
+        controller._move_to_reference = lambda active_tab, reference: (
+            EditorController._move_to_reference(controller, active_tab, reference)
+        )
+        controller._complete_search_navigation = lambda active_tab, target: (
+            EditorController._complete_search_navigation(controller, active_tab, target)
         )
 
-        AscGuiApp._complete_pending_member_navigation(app, "Lexample/Target;")
+        EditorController.complete_pending_navigation(controller, "Lexample/Target;")
 
-        self.assertIsNone(app._pending_member_navigation)
+        self.assertIsNone(controller.pending_navigation)
         self.assertEqual(text.insert, "1.0+40c")
         self.assertEqual(text.seen, ["1.0+40c"] )
         self.assertEqual(tab.insert_index, "1.0+40c")
@@ -206,17 +248,17 @@ class SourceEditTests(unittest.TestCase):
         )
         applied = []
         text = _NavigationText()
-        app = SimpleNamespace(
-            _ctrl_member_links_visible=False,
-            source_text=text,
-            _active_tab=lambda: tab,
-            store=SimpleNamespace(class_to_dex={"Llocal/Target;": "classes.dex"}),
-            _tag_ranges=lambda name, spans: applied.append((name, spans)),
+        view = SimpleNamespace(
+            member_links_visible=False,
+            text=text,
+            tag_ranges=lambda name, spans: applied.append((name, spans)),
         )
 
-        AscGuiApp._show_member_links(app)
+        EditorView.show_member_links(
+            view, tab, {"Llocal/Target;": "classes.dex"}
+        )
 
-        self.assertTrue(app._ctrl_member_links_visible)
+        self.assertTrue(view.member_links_visible)
         self.assertEqual(applied, [("member_link", [(1, 4)])])
         self.assertIn(("raise", "member_link"), text.tags)
 
@@ -361,60 +403,57 @@ class SourceEditTests(unittest.TestCase):
     def test_x_on_method_declaration_searches_current_class(self):
         source = "public void run()\n{\n    return;\n}\n"
         start = source.index("run")
-        app, started = _make_app(
+        controller, started = _make_controller(
             source, [(start, start + 3, "method", "Lexample/Test;", "run", "()V", True)], start + 1
         )
 
-        result = AscGuiApp._find_current_member_references(app)
+        result = EditorController.find_current_member_references(controller)
 
         self.assertEqual(result, "break")
-        self.assertEqual(app.search_value_var.get(), "run")
-        self.assertEqual(app.search_class_var.get(), "Lexample/Test;")
-        self.assertEqual(started, [{"exact_member": True}])
+        self.assertEqual(started, [("method", "run", "Lexample/Test;")])
 
     def test_x_on_invocation_uses_invoked_method_class(self):
         source = "public void run() { this.a.callToMethod(); }"
         start = source.index("callToMethod")
-        app, started = _make_app(
+        controller, started = _make_controller(
             source,
             [(start, start + len("callToMethod"), "method", "Lexample/Target;", "callToMethod", "()V", False)],
             start + 2,
         )
 
-        AscGuiApp._find_current_member_references(app)
+        EditorController.find_current_member_references(controller)
 
-        self.assertEqual(app.search_value_var.get(), "callToMethod")
-        self.assertEqual(app.search_class_var.get(), "Lexample/Target;")
-        self.assertEqual(started, [{"exact_member": True}])
+        self.assertEqual(started, [
+            ("method", "callToMethod", "Lexample/Target;"),
+        ])
 
     def test_x_on_field_access_uses_declaring_field_class(self):
         source = "public void run() { this.a = target.value; }"
         start = source.index("value")
-        app, started = _make_app(
+        controller, started = _make_controller(
             source,
             [(start, start + len("value"), "field", "Lexample/Target;", "value", "I", False)],
             start + 2,
         )
 
-        AscGuiApp._find_current_member_references(app)
+        EditorController.find_current_member_references(controller)
 
-        self.assertEqual(app.search_type_var.get(), "field refs")
-        self.assertEqual(app.search_value_var.get(), "value")
-        self.assertEqual(app.search_class_var.get(), "Lexample/Target;")
-        self.assertEqual(started, [{"exact_member": True}])
+        self.assertEqual(started, [("field", "value", "Lexample/Target;")])
 
     def test_x_inside_method_but_not_on_method_name_does_not_search(self):
         source = "public void run()\n{\n    return;\n}\n"
         start = source.index("run")
-        app, started = _make_app(
+        status = _Value()
+        controller, started = _make_controller(
             source, [(start, start + 3, "method", "Lexample/Test;", "run", "()V", True)], source.index("return")
         )
+        controller.set_status = status.set
 
-        AscGuiApp._find_current_member_references(app)
+        EditorController.find_current_member_references(controller)
 
         self.assertEqual(started, [])
         self.assertEqual(
-            app.status_var.get(),
+            status.get(),
             "Place the cursor on a method or field name to find its references",
         )
 
@@ -449,12 +488,10 @@ class SourceEditTests(unittest.TestCase):
 
         names = ['Ll/\U00010000;', 'Ll/;']
         dex = DEX.parse(memoryview(bytes(_make_class_dex(names))), 'utf16-order.dex')
-        method = FindRefManager(dex)._get_method_locator(True)
-        field = FindRefManager(dex)._get_field_locator(True)
+        locator = FindRefManager(dex)._get_type_locator()
         for index, name in enumerate(names):
             with self.subTest(name=name):
-                self.assertEqual(method._find_type_idx_precisely(name), index)
-                self.assertEqual(field._find_type_idx_precisely(name), index)
+                self.assertEqual(locator._find_type_idx_precisely(name), index)
 
     def test_exact_field_locator_does_not_use_substring_matching(self):
         from dex_fixture import make_static_field_dex

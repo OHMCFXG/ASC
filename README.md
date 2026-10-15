@@ -12,6 +12,54 @@ We will demonstrate this architecture live against a 352MB commercial APK. Droid
 
 https://github.com/user-attachments/assets/4c4a6813-8561-490c-a573-ef113da861b6
 
+Raw absolute values, measured with 10 threads across four APK targets of
+increasing size:
+
+**Global string xref search**
+
+| Tool | TelegramX (59MB) | WhatsApp (130MB) | Grab (228MB) | Lark (352MB) |
+| --- | --- | --- | --- | --- |
+| ASC | 322ms | 418ms | 806ms | 1.597s |
+| JADX | 20s | 32s | 2m14s | 8m2s |
+
+ASC is 62x to 302x faster than JADX for global string xref search.
+
+**Single-class decompile**
+
+| Tool | TelegramX (59MB) | WhatsApp (130MB) | Grab (228MB) | Lark (352MB) |
+| --- | --- | --- | --- | --- |
+| ASC | 157ms | 141ms | 165ms | 303ms |
+| JADX | 6s | 15s | 37s | 1m32s |
+
+ASC is 38x to 304x faster than JADX for single-class decompile.
+
+**CLI memory usage**
+
+| Tool | TelegramX (59MB) | WhatsApp (130MB) | Grab (228MB) | Lark (352MB) |
+| --- | --- | --- | --- | --- |
+| ASC | 36MB | 36MB | 58MB | 141MB |
+| JADX | 1,016MB | 2.1GB | 7.1GB | 13.2GB |
+
+ASC uses 28x to 125x less memory than JADX for CLI operation.
+
+**Disk cache usage**
+
+| Tool | TelegramX (59MB) | WhatsApp (130MB) | Grab (228MB) | Lark (352MB) |
+| --- | --- | --- | --- | --- |
+| ASC | 0MB | 0MB | 0MB | 0MB |
+| JADX | 119MB | 30MB | 127MB | 322MB |
+
+ASC stays fully in memory with zero disk cache, while JADX writes up to 322MB.
+
+Note: JADX runs out of memory on the largest target (Lark) during the global
+search (~49% searched), while ASC completes every target.
+
+As the benchmark shows, ASC is 62x faster than JADX on ~50MB APKs, and 302x
+faster on ~300MB APKs, with a tiny memory footprint. Agents can pair with ASC
+to analyze dozens or even hundreds of APKs at once, even on weak machines.
+The JADX MCP has a harder time here: JADX alone uses several GB just to
+preload, which makes switching between hundreds of APKs impractical.
+
 # Install
 ```bash
 # from PyPI
@@ -26,14 +74,18 @@ After installation, the `droidasc` CLI command is available globally:
 ```
 usage: droidasc [-h] {getclass,listclass,getmanifest,findrefs} ...
 
-ASC tooling entry.
+ASC tooling entry (v0.1.2.post1).
 
 positional arguments:
   {getclass,listclass,getmanifest,findrefs}
-    getclass            Locate the target class in APK, extract one DEX in memory, then decompile.
-    listclass           List classes defined across all DEX entries in APK.
-    getmanifest         Decode AndroidManifest.xml from APK and print it as XML.
-    findrefs            Find code references for string/type/method/field across all DEX entries in APK.
+    getclass            Locate the target class in APK, extract one DEX in
+                        memory, then decompile.
+    listclass           List classes across all DEX entries; use --prefix to
+                        filter by package/class prefix.
+    getmanifest         Decode AndroidManifest.xml from APK and print it as
+                        XML.
+    findrefs            Find code references for string/type/method/field
+                        across all DEX entries in APK.
 
 options:
   -h, --help            show this help message and exit
@@ -50,7 +102,17 @@ examples:
   droidasc findrefs app.apk method onCreate --class com.poc.Main
   droidasc findrefs app.apk method notify --class MainActivity --fuzzy-class -o method_refs.txt
   droidasc findrefs app.apk field apiKey -o field_refs.txt
+  droidasc findrefs app.apk extends java.lang.Object
+  droidasc findrefs app.apk extends android.app.Activity -o subclasses.txt
+  droidasc findrefs app.apk impl android.os.IInterface -o impls.txt
 ```
+
+`-V`/`--version` prints the installed package version.
+
+`findrefs` searches for code references (string/type/method/field) across all
+DEX entries; `-o` writes results to the selected file instead of stdout, and
+`--threads N` controls the worker pool. `extends`/`impl` locate classes that
+extend a target class or implement a target interface, respectively.
 
 `listclass` prints Dalvik class descriptors in APK/DEX definition order, one per
 line. With `-o`, output is written to the selected file instead of stdout.

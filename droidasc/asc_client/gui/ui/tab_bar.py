@@ -1,33 +1,34 @@
 import tkinter as tk
 import tkinter.font as tkfont
-from dataclasses import dataclass, field
 from tkinter import ttk
 
-from droidasc.asc_client.gui.runtime import dalvik_to_dot
-
-
-@dataclass
-class EditorTab:
-    dalvik_class : str
-    title : str
-    kind : str = "class"
-    dex_name : str = ""
-    source : str = ""
-    edited_source : str = ""
-    loading : bool = True
-    error : str = ""
-    yview : tuple = (0.0, 1.0)
-    xview : tuple = (0.0, 1.0)
-    insert_index : str = "1.0"
-    comments : dict = field(default_factory=dict)
-    member_references : list = field(default_factory=list)
-    rendered_member_references : list = field(default_factory=list)
+from droidasc.asc_client.gui.backend import dalvik_to_dot
+from droidasc.asc_client.gui.state import EditorTab
 
 
 class EditorTabBar(ttk.Frame):
-    def __init__(self, master, app):
+    def __init__(
+        self,
+        master,
+        get_tabs,
+        get_active_index,
+        activate_tab,
+        close_tab,
+        clear_tabs,
+        open_settings,
+        get_theme,
+        apply_theme_to_window,
+        apply_listbox_theme,
+    ):
         super().__init__(master)
-        self.app = app
+        self.get_tabs = get_tabs
+        self.get_active_index = get_active_index
+        self.activate_tab = activate_tab
+        self.close_tab = close_tab
+        self.clear_tabs = clear_tabs
+        self.get_theme = get_theme
+        self.apply_theme_to_window = apply_theme_to_window
+        self.apply_listbox_theme = apply_listbox_theme
         self.tab_scroll_index = 0
         self.tab_rects = []
         self.hover_close_index = None
@@ -66,7 +67,7 @@ class EditorTabBar(ttk.Frame):
             padx=0,
             pady=0,
             highlightthickness=0,
-            command=self.app._open_settings,
+            command=open_settings,
         )
         self.settings_button.grid(row=0, column=2, sticky="ns")
 
@@ -82,7 +83,7 @@ class EditorTabBar(ttk.Frame):
         self.apply_theme()
 
     def _theme(self):
-        return self.app.theme
+        return self.get_theme()
 
     def apply_theme(self):
         t = self._theme()
@@ -102,16 +103,16 @@ class EditorTabBar(ttk.Frame):
             activeforeground=t["text"],
         )
         if self.popup is not None and self.popup.winfo_exists():
-            self.app.apply_theme_to_window(self.popup)
+            self.apply_theme_to_window(self.popup)
             if self.popup_listbox is not None:
-                self.app.theme_manager.apply_listbox(self.popup_listbox)
+                self.apply_listbox_theme(self.popup_listbox)
         self.redraw()
 
     def _tab_width(self, tab : EditorTab) -> int:
         return max(128, min(260, self.font.measure(tab.title) + 56))
 
     def _visible_capacity(self, start : int, width : int):
-        tabs = self.app.editor_tabs
+        tabs = self.get_tabs()
         used = 0
         visible = []
         for idx in range(start, len(tabs)):
@@ -125,9 +126,10 @@ class EditorTabBar(ttk.Frame):
         return visible
 
     def _tabs_overflow(self, width : int) -> bool:
-        if not self.app.editor_tabs:
+        tabs = self.get_tabs()
+        if not tabs:
             return False
-        total = sum(self._tab_width(tab) for tab in self.app.editor_tabs)
+        total = sum(self._tab_width(tab) for tab in tabs)
         return total > max(1, width)
 
     def _more_button_width(self):
@@ -151,6 +153,8 @@ class EditorTabBar(ttk.Frame):
             return width
         frame_width = self.winfo_width()
         if frame_width > 1:
+            # Before the first layout pass the canvas reports width 1. Derive
+            # its future space from the frame minus the two fixed buttons.
             return max(1, frame_width - self._fixed_button_width())
         return 240
 
@@ -180,8 +184,11 @@ class EditorTabBar(ttk.Frame):
             return
         used = 0
         start = index
+        tabs = self.get_tabs()
+        # Backfill from the requested tab so as many preceding tabs as possible
+        # remain visible instead of always pinning the target to the left edge.
         for idx in range(index, -1, -1):
-            tab_width = self._tab_width(self.app.editor_tabs[idx])
+            tab_width = self._tab_width(tabs[idx])
             if idx != index and used + tab_width > width:
                 break
             used += tab_width
@@ -192,7 +199,7 @@ class EditorTabBar(ttk.Frame):
         self._sync_more_button()
         self.canvas.delete("all")
         self.tab_rects = []
-        tabs = self.app.editor_tabs
+        tabs = self.get_tabs()
         t = self._theme()
         width = self._available_tab_width()
         height = max(22, self.canvas.winfo_height())
@@ -206,7 +213,7 @@ class EditorTabBar(ttk.Frame):
         x = 0
         for index, tab_width in self._visible_capacity(self.tab_scroll_index, width):
             tab = tabs[index]
-            active = index == self.app.active_tab_idx
+            active = index == self.get_active_index()
             x2 = min(width, x + tab_width)
             fill = t["tab_active"] if active else t["tab_inactive"]
             outline = t["border"] if active else t["border_light"]
@@ -236,6 +243,8 @@ class EditorTabBar(ttk.Frame):
                 font=self.close_font,
             )
 
+            # Canvas items do not provide widget hit testing. Cache tab and
+            # close-button bounds for click and hover handling.
             self.tab_rects.append((index, x, x2, close_x1, close_x2))
             x = x2 - 1
         if self.popup is not None and self.popup.winfo_exists():
@@ -247,6 +256,8 @@ class EditorTabBar(ttk.Frame):
         suffix = "..."
         low = 0
         high = len(text)
+        # Font measurement is relatively expensive; binary search the longest
+        # fitting prefix instead of removing one character at a time.
         while low < high:
             mid = (low + high + 1) // 2
             if self.font.measure(text[:mid] + suffix) <= max_width:
@@ -266,14 +277,14 @@ class EditorTabBar(ttk.Frame):
         if index is None:
             return
         if close_hit:
-            self.app.close_tab(index)
+            self.close_tab(index)
             return
-        self.app.activate_tab(index)
+        self.activate_tab(index)
 
     def _on_middle_click(self, event):
         index, _close_hit = self._hit_test(event.x)
         if index is not None:
-            self.app.close_tab(index)
+            self.close_tab(index)
 
     def _on_right_click(self, _event):
         self.show_tab_list()
@@ -300,7 +311,7 @@ class EditorTabBar(ttk.Frame):
         return "break"
 
     def scroll_tabs(self, step : int):
-        tabs = self.app.editor_tabs
+        tabs = self.get_tabs()
         if not tabs:
             return "break"
         next_index = max(0, min(len(tabs) - 1, self.tab_scroll_index + step))
@@ -310,7 +321,8 @@ class EditorTabBar(ttk.Frame):
         return "break"
 
     def show_tab_list(self):
-        if not self.app.editor_tabs:
+        tabs = self.get_tabs()
+        if not tabs:
             return
         if self.popup is not None and self.popup.winfo_exists():
             self.popup.lift()
@@ -328,7 +340,7 @@ class EditorTabBar(ttk.Frame):
         screen_width = popup.winfo_screenwidth()
         width = max(360, min(max(640, text_width + 96), screen_width - 80))
         row_height = 24
-        visible_rows = min(14, max(4, len(self.app.editor_tabs)))
+        visible_rows = min(14, max(4, len(tabs)))
         height = visible_rows * row_height + 68
         x = self.more_button.winfo_rootx() + self.more_button.winfo_width() - width
         y = self.more_button.winfo_rooty() + self.more_button.winfo_height()
@@ -381,24 +393,25 @@ class EditorTabBar(ttk.Frame):
                 return "break"
             index = self._tab_index_from_popup_selection(selection[0])
             if index is not None:
-                self.app.activate_tab(index)
+                self.activate_tab(index)
             return "break"
 
         def close_selected(_event = None):
             selection = listbox.curselection()
             if not selection:
                 return "break"
-            if not self.app.editor_tabs:
+            tabs = self.get_tabs()
+            if not tabs:
                 return "break"
             index = self._tab_index_from_popup_selection(selection[0])
             if index is None:
                 return "break"
-            self.app.close_tab(index)
-            self.refresh_tab_list(min(index, len(self.app.editor_tabs) - 1), force_see=True)
+            self.close_tab(index)
+            self.refresh_tab_list(min(index, len(self.get_tabs()) - 1), force_see=True)
             return "break"
 
         def clear_tabs():
-            self.app.clear_tabs()
+            self.clear_tabs()
             self.refresh_tab_list()
 
         def dismiss(_event = None):
@@ -439,8 +452,8 @@ class EditorTabBar(ttk.Frame):
         listbox.bind("<MouseWheel>", on_mousewheel)
         listbox.bind("<Button-4>", lambda _event: listbox.yview_scroll(-1, "units"))
         listbox.bind("<Button-5>", lambda _event: listbox.yview_scroll(1, "units"))
-        self.app.apply_theme_to_window(popup)
-        self.app.theme_manager.apply_listbox(listbox)
+        self.apply_theme_to_window(popup)
+        self.apply_listbox_theme(listbox)
         filter_entry.focus_set()
         self.refresh_tab_list(force_see=True)
 
@@ -450,7 +463,7 @@ class EditorTabBar(ttk.Frame):
         keyword = ""
         if self.popup_filter_var is not None:
             keyword = self.popup_filter_var.get().strip().lower()
-        for idx, tab in enumerate(self.app.editor_tabs):
+        for idx, tab in enumerate(self.get_tabs()):
             state = "loading" if tab.loading else "error" if tab.error else tab.dex_name
             suffix = f"  [{state}]" if state else ""
             row = f"{dalvik_to_dot(tab.dalvik_class)}{suffix}"
@@ -458,6 +471,8 @@ class EditorTabBar(ttk.Frame):
                 continue
             rows.append(row)
             indexes.append(idx)
+        # Filtering changes listbox positions. Keep an explicit mapping back to
+        # the controller's original tab indexes for activate/close actions.
         self.popup_visible_tab_indexes = indexes
         return rows
 
@@ -480,20 +495,21 @@ class EditorTabBar(ttk.Frame):
             return
         listbox = self.popup_listbox
         rows = self._tab_list_rows()
+        tabs = self.get_tabs()
         if not rows:
-            rows = ["(no matching tabs)" if self.app.editor_tabs else "(no open tabs)"]
+            rows = ["(no matching tabs)" if tabs else "(no open tabs)"]
             listbox.config(state=tk.DISABLED)
             if self.popup_close_button is not None:
                 self.popup_close_button.config(state=tk.DISABLED)
             if self.popup_clear_button is not None:
-                self.popup_clear_button.config(state=tk.NORMAL if self.app.editor_tabs else tk.DISABLED)
+                self.popup_clear_button.config(state=tk.NORMAL if tabs else tk.DISABLED)
         else:
             listbox.config(state=tk.NORMAL)
             if self.popup_close_button is not None:
                 self.popup_close_button.config(state=tk.NORMAL)
             if self.popup_clear_button is not None:
                 self.popup_clear_button.config(state=tk.NORMAL)
-        if not self.app.editor_tabs or not self.popup_visible_tab_indexes:
+        if not tabs or not self.popup_visible_tab_indexes:
             preferred_index = None
             force_see = False
         if preferred_index is not None and preferred_index < 0:
@@ -501,21 +517,23 @@ class EditorTabBar(ttk.Frame):
         yview = listbox.yview()
         xview = listbox.xview()
         if rows != self.popup_rows:
+            # Rebuild only when content changed, then restore scroll position so
+            # loading/error title updates do not jump the popup unexpectedly.
             listbox.config(state=tk.NORMAL)
             listbox.delete(0, tk.END)
             for row in rows:
                 listbox.insert(tk.END, row)
             self.popup_rows = rows
-            if not self.app.editor_tabs or not self.popup_visible_tab_indexes:
+            if not tabs or not self.popup_visible_tab_indexes:
                 listbox.config(state=tk.DISABLED)
             if yview:
                 listbox.yview_moveto(yview[0])
             if xview:
                 listbox.xview_moveto(xview[0])
-        if not self.app.editor_tabs or not self.popup_visible_tab_indexes:
+        if not tabs or not self.popup_visible_tab_indexes:
             return
         if preferred_index is None:
-            preferred_index = self.app.active_tab_idx
+            preferred_index = self.get_active_index()
         if preferred_index is not None and preferred_index >= 0:
             listbox.selection_clear(0, tk.END)
             if preferred_index in self.popup_visible_tab_indexes:

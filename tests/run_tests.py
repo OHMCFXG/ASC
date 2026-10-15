@@ -11,7 +11,11 @@ sys.path.insert(0, str(ROOT))
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--require-decompiler', action='store_true')
-    parser.add_argument('--suite', choices=('all', 'unit', 'integration'), default='all')
+    parser.add_argument(
+        '--suite',
+        choices=('all', 'unit', 'integration', 'gui'),
+        default='all',
+    )
     args = parser.parse_args()
     if args.require_decompiler and importlib.util.find_spec('dadguard') is None:
         parser.error('dadguard is required; check the source tree')
@@ -23,10 +27,24 @@ if __name__ == '__main__':
                     yield from tests(item)
                 else:
                     yield item
-        suite = unittest.TestSuite(test for test in tests(suite)
-                                   if ('test_decompiler.DecompilerTests.' in test.id()
-                                       or test.id().endswith('test_archive_is_reproducible_and_runs_outside_checkout'))
-                                   == (args.suite == 'integration'))
+
+        def group(test):
+            test_id = test.id()
+            if ('test_decompiler.DecompilerTests.' in test_id
+                    or test_id.endswith('test_archive_is_reproducible_and_runs_outside_checkout')):
+                return 'integration'
+            if test_id.startswith((
+                'test_gui_backend.',
+                'test_gui_editor.',
+                'test_gui_views.',
+                'test_source_edit.',
+            )):
+                return 'gui'
+            return 'unit'
+
+        suite = unittest.TestSuite(
+            test for test in tests(suite) if group(test) == args.suite
+        )
     if suite.countTestCases() == 0:
         parser.error('selected suite contains no tests')
     result = unittest.TextTestRunner(verbosity=2).run(suite)

@@ -17,6 +17,8 @@ def dex041_logical_offsets(data : bytes):
     offsets = []
     off = 0
     data_len = len(data)
+    # DEX 041 containers concatenate complete logical files. Each header's
+    # file_size points to the next header rather than the end of the APK entry.
     while off + _DEX_HEADER_MIN_SIZE <= data_len and data[off:off + 8] == _DEX041_MAGIC:
         file_size = _U32_FROM(data, off + 0x20)[0]
         if file_size < _DEX_HEADER_MIN_SIZE or off + file_size > data_len:
@@ -28,6 +30,7 @@ def dex041_logical_offsets(data : bytes):
 
 def _patch_u32(buf : bytearray, off : int, delta : int):
     val = _U32_FROM(buf, off)[0]
+    # Zero and NO_INDEX are sentinels, not physical offsets.
     if val != 0 and val != 0xFFFFFFFF and val >= delta:
         buf[off:off + 4] = (val - delta).to_bytes(4, "little")
 
@@ -74,12 +77,16 @@ def normalize_dex041_logical(data : bytes, header_off : int):
     header_size = _U32_FROM(data, header_off + 0x24)[0]
     if header_size < _DEX_HEADER_MIN_SIZE or header_off + header_size > len(data):
         header_size = _DEX_HEADER_MIN_SIZE
+    # Most DEX041 offsets remain absolute to the container. Keep the backing
+    # bytes in place and copy only the selected header to offset zero.
     out = bytearray(data)
     out[:header_size] = data[header_off:header_off + header_size]
     return bytes(out)
 
 
 def _patch_class_data_code_offsets(buf : bytearray, class_defs_off : int, class_defs_size : int, delta : int):
+    # class_data_item is a run of delta-encoded fields followed by methods.
+    # Only each method's final code_off is an address that needs rebasing.
     for class_idx in range(class_defs_size):
         class_def_off = class_defs_off + class_idx * 32
         if class_def_off + 32 > len(buf):
@@ -102,6 +109,8 @@ def _patch_class_data_code_offsets(buf : bytearray, class_defs_off : int, class_
 
 
 def _patch_code_item_debug_offsets(buf : bytearray, delta : int):
+    # Locate code_item through map_list; code items are variable-sized and
+    # cannot be found safely by scanning for plausible headers.
     map_off = _U32_FROM(buf, 0x34)[0]
     if not (0 < map_off + 4 <= len(buf)):
         return
@@ -144,6 +153,8 @@ def iter_logical_dex_buffers(name : str, data : bytes):
     if len(offsets) <= 1:
         yield name, data
         return
+    # Preserve the physical APK entry in the synthetic name so logs and search
+    # results can still identify which container produced the logical DEX.
     for idx, header_off in enumerate(offsets):
         logical_name = f"{name}!classes{idx + 1}.dex"
         yield logical_name, normalize_dex041_logical(data, header_off)

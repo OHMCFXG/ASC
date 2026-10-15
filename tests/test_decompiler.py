@@ -80,7 +80,7 @@ assert sys.modules['mutf8.cmutf8'].decode_modified_utf8.__module__ == '_asc_clie
                     self.assertIn('class Test', source.stdout)
 
     def test_gui_store_can_decompile_twice_and_then_search(self):
-        from droidasc.asc_client.gui.runtime import GuiDexStore
+        from droidasc.asc_client.gui.backend import GuiDexStore
         with tempfile.TemporaryDirectory() as directory:
             apk = Path(directory) / 'fixture.apk'
             with zipfile.ZipFile(apk, 'w') as archive:
@@ -94,7 +94,7 @@ assert sys.modules['mutf8.cmutf8'].decode_modified_utf8.__module__ == '_asc_clie
             self.assertTrue(store.search_members('method', 'first'))
 
     def test_gui_store_subprocess_search_uses_package_module(self):
-        from droidasc.asc_client.gui.runtime import GuiDexStore
+        from droidasc.asc_client.gui.backend import GuiDexStore
         with tempfile.TemporaryDirectory() as directory:
             apk = Path(directory) / 'fixture.apk'
             with zipfile.ZipFile(apk, 'w') as archive:
